@@ -1,0 +1,6 @@
+node_modules/
+.env
+finance.db
+finance.db-journal
+finance.db-shm
+finance.db-wal
