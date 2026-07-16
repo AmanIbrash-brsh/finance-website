@@ -1,5 +1,5 @@
 # Stage 1: Сборка фронтенда React + Vite
-FROM node:20-alpine AS frontend-builder
+FROM node:20-slim AS frontend-builder
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN npm install
@@ -7,7 +7,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # Stage 2: Запуск бэкенда Node.js и раздача собранной статики
-FROM node:20-alpine
+FROM node:20-slim
 WORKDIR /app/backend
 
 # Установка зависимостей бэкенда (только production)
