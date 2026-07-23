@@ -20,10 +20,12 @@ export async function initDb() {
   // Create tables
   await db.exec(`
     CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY,
-      username TEXT,
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT UNIQUE,
+      password_hash TEXT,
       first_name TEXT,
-      auth_token TEXT,
+      telegram_id INTEGER,
+      telegram_link_code TEXT,
       currency TEXT DEFAULT 'RUB',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -59,6 +61,29 @@ export async function initDb() {
       estimated_price REAL DEFAULT 0,
       priority TEXT CHECK(priority IN ('low', 'medium', 'high')) DEFAULT 'medium',
       bought INTEGER DEFAULT 0, -- 0 for not bought, 1 for bought
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS debts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      person_name TEXT NOT NULL,
+      amount REAL NOT NULL,
+      type TEXT CHECK(type IN ('owe', 'owed')) NOT NULL,
+      due_date TEXT, -- YYYY-MM-DD
+      status TEXT CHECK(status IN ('pending', 'paid')) DEFAULT 'pending',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS constant_incomes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      source_name TEXT NOT NULL,
+      amount REAL NOT NULL,
+      day_of_month INTEGER NOT NULL, -- 1-31
+      last_credited_month TEXT, -- YYYY-MM
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );

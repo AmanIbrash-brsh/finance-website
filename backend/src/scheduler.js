@@ -1,106 +1,115 @@
 import { getDb } from './db.js';
 
-// Helper to add months or years to a date string (YYYY-MM-DD)
-function advanceDate(dateStr, period) {
-  const date = new Date(dateStr);
-  if (period === 'yearly') {
-    date.setFullYear(date.getFullYear() + 1);
-  } else {
-    date.setMonth(date.getMonth() + 1);
-  }
-  return date.toISOString().slice(0, 10);
+let botInstance = null;
+
+export function startScheduler(bot) {
+  botInstance = bot;
+  // Run checks every hour
+  const ONE_HOUR = 60 * 60 * 1000;
+  setInterval(runChecks, ONE_HOUR);
+  
+  // Run immediately on start
+  runChecks();
+  console.log('⏰ Scheduler started (checks every hour).');
 }
 
-export async function checkSubscriptions(bot) {
-  if (!bot) {
-    console.log('Scheduler: Bot is not initialized. Skipping subscription checks.');
-    return;
+async function runChecks() {
+  console.log('🕰️ Running scheduled checks...');
+  try {
+    await checkSalaries();
+    await checkSubscriptions();
+    await checkDebts();
+  } catch (err) {
+    console.error('Error during scheduled checks:', err);
   }
+}
 
-  console.log('🕰️ Running scheduled subscription checks...');
+async function checkSalaries() {
   const db = getDb();
+  const today = new Date();
+  const currentDay = today.getDate();
+  const currentMonthStr = today.toISOString().slice(0, 7); // YYYY-MM
+  const fullDateStr = today.toISOString().slice(0, 10);
+
+  const incomes = await db.all('SELECT * FROM constant_incomes');
   
-  const todayStr = new Date().toISOString().slice(0, 10);
-  
-  // Calculate tomorrow's date
+  for (const income of incomes) {
+    // If today is the payout day or later, and it hasn't been credited this month
+    if (currentDay >= income.day_of_month && income.last_credited_month !== currentMonthStr) {
+      // 1. Add transaction
+      await db.run(
+        'INSERT INTO transactions (user_id, type, amount, category, description, date) VALUES (?, ?, ?, ?, ?, ?)',
+        income.user_id, 'income', income.amount, 'Регулярный доход', income.source_name, fullDateStr
+      );
+
+      // 2. Update last credited month
+      await db.run(
+        'UPDATE constant_incomes SET last_credited_month = ? WHERE id = ?',
+        currentMonthStr, income.id
+      );
+
+      // 3. Notify user if telegram linked
+      const user = await db.get('SELECT telegram_id FROM users WHERE id = ?', income.user_id);
+      if (user && user.telegram_id && botInstance) {
+        try {
+          await botInstance.telegram.sendMessage(
+            user.telegram_id,
+            `💰 Начислен регулярный доход!\n*${income.source_name}*: +${income.amount} ₽`,
+            { parse_mode: 'Markdown' }
+          );
+        } catch (e) {
+          console.error(`Failed to send salary notification to ${user.telegram_id}`);
+        }
+      }
+    }
+  }
+}
+
+async function checkSubscriptions() {
+  const db = getDb();
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
   const tomorrowStr = tomorrow.toISOString().slice(0, 10);
 
-  try {
-    // 1. Pre-notification for tomorrow's payments
-    const upcomingSubs = await db.all(
-      'SELECT * FROM subscriptions WHERE active = 1 AND next_payment_date = ?',
-      tomorrowStr
-    );
+  const subs = await db.all('SELECT * FROM subscriptions WHERE active = 1 AND next_payment_date = ?', tomorrowStr);
 
-    for (const sub of upcomingSubs) {
+  for (const sub of subs) {
+    const user = await db.get('SELECT telegram_id FROM users WHERE id = ?', sub.user_id);
+    if (user && user.telegram_id && botInstance) {
       try {
-        await bot.telegram.sendMessage(
-          sub.user_id,
-          `🔔 **Напоминание о подписке!**\n\nЗавтра ожидается оплата подписки *${sub.name}* на сумму *${sub.amount} ₽*.`,
+        await botInstance.telegram.sendMessage(
+          user.telegram_id,
+          `⚠️ Напоминание: Завтра (${tomorrowStr}) будет списание за подписку *${sub.name}* на сумму ${sub.amount} ₽.`,
           { parse_mode: 'Markdown' }
         );
-        console.log(`Sent upcoming subscription warning to user ${sub.user_id} for sub: ${sub.name}`);
-      } catch (err) {
-        console.error(`Failed to send Telegram message to user ${sub.user_id}:`, err.message);
+      } catch (e) {
+        console.error(`Failed to send subscription notification to ${user.telegram_id}`);
       }
     }
-
-    // 2. Process today's payments (Notify + Log Expense + Advance Date)
-    const todaySubs = await db.all(
-      'SELECT * FROM subscriptions WHERE active = 1 AND next_payment_date <= ?',
-      todayStr
-    );
-
-    for (const sub of todaySubs) {
-      try {
-        await db.run('BEGIN TRANSACTION');
-
-        // 1. Log transaction expense
-        await db.run(
-          'INSERT INTO transactions (user_id, type, amount, category, description, date) VALUES (?, ?, ?, ?, ?, ?)',
-          sub.user_id, 'expense', sub.amount, 'Развлечения', `Подписка: ${sub.name}`, todayStr
-        );
-
-        // 2. Advance next payment date
-        const newPaymentDate = advanceDate(sub.next_payment_date, sub.period);
-        await db.run(
-          'UPDATE subscriptions SET next_payment_date = ? WHERE id = ?',
-          newPaymentDate, sub.id
-        );
-
-        await db.run('COMMIT');
-
-        // 3. Notify user in Telegram
-        await bot.telegram.sendMessage(
-          sub.user_id,
-          `📅 **Списание по подписке!**\n\nСегодня оплачена подписка *${sub.name}* на сумму *${sub.amount} ₽*.\n` +
-          `💸 Расход автоматически добавлен в историю.\n` +
-          `📆 Следующий платеж запланирован на: *${newPaymentDate}*`,
-          { parse_mode: 'Markdown' }
-        );
-        console.log(`Processed subscription payment for sub: ${sub.name}, advanced to: ${newPaymentDate}`);
-      } catch (err) {
-        try { await db.run('ROLLBACK'); } catch (_) {}
-        console.error(`Failed to process payment for subscription ${sub.name} (${sub.id}):`, err);
-      }
-    }
-  } catch (err) {
-    console.error('Error checking subscriptions:', err);
   }
 }
 
-// Start daily check intervals
-export function startScheduler(bot) {
-  // Run check immediately on start
-  setTimeout(() => checkSubscriptions(bot), 5000);
+async function checkDebts() {
+  const db = getDb();
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = tomorrow.toISOString().slice(0, 10);
 
-  // Run checks every 12 hours (12 * 60 * 60 * 1000 ms)
-  const intervalMs = 12 * 60 * 60 * 1000;
-  setInterval(() => {
-    checkSubscriptions(bot);
-  }, intervalMs);
+  const debts = await db.all('SELECT * FROM debts WHERE status = "pending" AND due_date = ?', tomorrowStr);
 
-  console.log('⏰ Subscription scheduler successfully started (checks every 12 hours).');
+  for (const debt of debts) {
+    const user = await db.get('SELECT telegram_id FROM users WHERE id = ?', debt.user_id);
+    if (user && user.telegram_id && botInstance) {
+      const typeText = debt.type === 'owe' ? 'Вам нужно вернуть долг' : 'Вам должны вернуть долг';
+      try {
+        await botInstance.telegram.sendMessage(
+          user.telegram_id,
+          `📅 Напоминание о долге: Завтра крайний срок!\n${typeText}\n*Человек*: ${debt.person_name}\n*Сумма*: ${debt.amount} ₽`,
+          { parse_mode: 'Markdown' }
+        );
+      } catch (e) {
+        console.error(`Failed to send debt notification to ${user.telegram_id}`);
+      }
+    }
+  }
 }
