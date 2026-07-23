@@ -86,7 +86,9 @@ export async function initBot() {
       `• Используй команду /stats для быстрой сводки расходов.\n` +
       `• Или открой полноценный Dashboard с графиками по кнопке ниже! 👇`,
       Markup.keyboard([
-        [Markup.button.webApp('📊 Открыть Dashboard', webAppLink)]
+        ['➕ Доход', '➖ Расход'],
+        ['📊 Статистика', '🛒 Покупки'],
+        ['📅 Подписки', Markup.button.webApp('📊 Открыть Dashboard', webAppLink)]
       ]).resize()
     );
   });
@@ -111,8 +113,7 @@ export async function initBot() {
     );
   });
 
-  // /stats command - Show summary of expenses for current month
-  bot.command('stats', async (ctx) => {
+  const statsHandler = async (ctx) => {
     const db = getDb();
     const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
     
@@ -159,7 +160,11 @@ export async function initBot() {
     await ctx.replyWithMarkdownV2(
       message.replace(/\./g, '\\.').replace(/-/g, '\\-').replace(/\+/g, '\\+')
     );
-  });
+  };
+
+  // /stats command - Show summary of expenses for current month
+  bot.command('stats', statsHandler);
+  bot.hears('📊 Статистика', statsHandler);
 
   // /buy command - Adds item to shopping list
   bot.command('buy', async (ctx) => {
@@ -228,6 +233,20 @@ export async function initBot() {
     const text = ctx.message.text.trim();
     const db = getDb();
     const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
+    // Handle interactive button text replies
+    if (text === '➕ Доход') {
+      return ctx.reply('Введите сумму и описание дохода, начиная с "+", например:\n\n`+ 15000 Зарплата`', { parse_mode: 'Markdown' });
+    }
+    if (text === '➖ Расход') {
+      return ctx.reply('Введите сумму и описание расхода, например:\n\n`450 Кофе и круассан`', { parse_mode: 'Markdown' });
+    }
+    if (text === '🛒 Покупки') {
+      return ctx.reply('Чтобы добавить покупку, используй команду /buy, например:\n\n`/buy Молоко 90`', { parse_mode: 'Markdown' });
+    }
+    if (text === '📅 Подписки') {
+      return ctx.reply('Чтобы добавить подписку, используй команду /sub, например:\n\n`/sub Netflix 800`', { parse_mode: 'Markdown' });
+    }
 
     // 1. Check for Income (starts with '+' or '+ ')
     const incomeMatch = text.match(/^\+\s*(\d+(?:\.\d+)?)\s+(.+)$/);
